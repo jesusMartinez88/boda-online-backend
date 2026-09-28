@@ -18,9 +18,11 @@ import userRoutes from "./routes/users.js";
 import adminRoutes from "./routes/admin.js";
 import landingQuestionnaireRoutes from "./routes/landingQuestionnaire.js";
 import invitationMediaRoutes from "./routes/invitation-media.js";
+import paymentRoutes from "./routes/payment.js";
 import { MEDIA_ROOT } from "./constants/media.js";
 import { initializeEmailService } from "./services/emailService.js";
 import { initializeWhatsAppService } from "./services/whatsappService.js";
+import { initializeStripeService } from "./services/stripeService.js";
 import helmet from "helmet";
 import { rateLimit, ipKeyGenerator } from "express-rate-limit";
 import jwt from "jsonwebtoken";
@@ -31,6 +33,7 @@ const app = express();
 
 initializeEmailService();
 initializeWhatsAppService();
+initializeStripeService();
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -40,13 +43,15 @@ app.use(
       directives: {
         defaultSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
-        scriptSrc: ["'self'"],
-        imgSrc: ["'self'", "data:", "https:"],
-        connectSrc: ["'self'"],
+        scriptSrc: ["'self'", "https://js.stripe.com"],
+        imgSrc: ["'self'", "data:", "https:", "https://*.stripe.com"],
+        connectSrc: ["'self'", "https://api.stripe.com"],
         fontSrc: ["'self'", "data:"],
         objectSrc: ["'none'"],
         mediaSrc: ["'self'"],
-        frameSrc: ["'none'"],
+        // Stripe.js monta un iframe interno para el Payment Element
+        // y para los desafíos 3DS.
+        frameSrc: ["'self'", "https://js.stripe.com", "https://hooks.stripe.com"],
       },
     },
     hsts: isProduction
@@ -106,7 +111,17 @@ const corsOptions = {
 
 app.set("trust proxy", 1);
 app.use(cors(corsOptions));
-app.use(express.json({ limit: "10mb" }));
+// `verify` captura el cuerpo crudo para que el handler del webhook de
+// Stripe pueda validar la firma. Express ya habrá parseado el JSON
+// para el resto de rutas (no afecta a su funcionamiento).
+app.use(
+  express.json({
+    limit: "10mb",
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+);
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(
   "/media/photos",
@@ -152,6 +167,7 @@ app.use("/api/users", userRoutes);
 app.use("/api/landing-questionnaire", landingQuestionnaireRoutes);
 app.use("/api/invitation-media", invitationMediaRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/payments", paymentRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

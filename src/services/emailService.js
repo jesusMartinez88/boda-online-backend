@@ -487,3 +487,213 @@ export const sendPasswordResetCodeEmail = async ({ to, username, code }) => {
     return null;
   }
 };
+
+/**
+ * Formatea un importe en céntimos como string en es-ES con la moneda
+ * indicada. Lo usamos en los emails para que el cliente vea el mismo
+ * formato que en la pantalla de checkout (ej. "59,00 EUR").
+ */
+const formatMoney = (amountCents, currency) => {
+  const major = (amountCents ?? 0) / 100;
+  const formatted = major.toLocaleString("es-ES", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return `${formatted} ${String(currency || "eur").toUpperCase()}`;
+};
+
+/**
+ * Email de confirmación de pago. Se envía cuando el webhook de Stripe
+ * confirma `payment_intent.succeeded`.
+ *
+ * Si el destinatario no tiene email configurado, devolvemos `null`
+ * silenciosamente: el panel admin ya marca al usuario como `paid`,
+ * así que el cliente puede seguir usando el producto.
+ */
+export const sendPaymentReceivedEmail = async ({
+  to: recipient,
+  username,
+  amount,
+  currency,
+  paymentIntentId,
+}) => {
+  if (!emailEnabled) {
+    console.warn(
+      "⚠️ Email service disabled. Payment-received email will not be sent.",
+    );
+    return null;
+  }
+
+  if (!recipient) {
+    // Es un caso esperado (registros sin email): solo lo logamos.
+    console.log(
+      "[payment] Usuario sin email configurado, se omite el email de pago.",
+      username ? `(username=${username})` : "",
+    );
+    return null;
+  }
+
+  const amountStr = formatMoney(amount, currency);
+
+  try {
+    const result = await resend.emails.send({
+      from: "BodasOnline <onboarding@resend.dev>",
+      to: recipient,
+      subject: "🎉 ¡Pago recibido! Tu boda está activa",
+      html: `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 540px; margin: 0 auto; background-color: #ffffff; border: 1px solid #f3e8ff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.05);">
+          <div style="background: linear-gradient(135deg, #ec4899, #be185d); padding: 24px; text-align: center; color: white;">
+            <h1 style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">BodasOnline</h1>
+            <p style="margin: 6px 0 0; font-size: 14px; opacity: 0.9;">¡Gracias por tu compra!</p>
+          </div>
+          <div style="padding: 32px 24px; color: #1f2937;">
+            <p style="margin-top: 0; font-size: 16px;">Hola <strong>${username || "usuario"}</strong>,</p>
+            <p style="font-size: 15px; color: #4b5563; line-height: 1.5;">
+              Hemos recibido correctamente el pago de tu
+              <strong>Plan Pareja Completo</strong> y tu cuenta ya está activa.
+            </p>
+            <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+              <tr style="background-color: #fdf2f8;">
+                <td style="padding: 12px 14px; border-radius: 8px; font-size: 14px; color: #6b7280;">Importe</td>
+                <td style="padding: 12px 14px; border-radius: 8px; font-size: 16px; font-weight: 700; color: #be185d; text-align: right;">${amountStr}</td>
+              </tr>
+              <tr>
+                <td style="padding: 12px 14px; font-size: 14px; color: #6b7280;">Referencia</td>
+                <td style="padding: 12px 14px; font-size: 13px; color: #4b5563; text-align: right; font-family: monospace;">${paymentIntentId || "—"}</td>
+              </tr>
+              <tr style="background-color: #fdf2f8;">
+                <td style="padding: 12px 14px; border-radius: 8px; font-size: 14px; color: #6b7280;">Plan</td>
+                <td style="padding: 12px 14px; border-radius: 8px; font-size: 14px; color: #1f2937; text-align: right;">Acceso ilimitado · pago único</td>
+              </tr>
+            </table>
+            <p style="font-size: 15px; color: #4b5563; line-height: 1.5;">
+              Ya puedes acceder a tu panel de control para empezar a configurar
+              tu invitación. Si tienes cualquier duda, responde a este correo y
+              te echamos una mano.
+            </p>
+            <div style="text-align: center; margin: 28px 0;">
+              <a href="https://bodas-online.example/dashboard" style="display: inline-block; background: linear-gradient(135deg, #ec4899, #be185d); color: #ffffff; padding: 12px 28px; border-radius: 999px; text-decoration: none; font-weight: 600; font-size: 15px;">
+                Ir a mi Panel de Control
+              </a>
+            </div>
+            <p style="font-size: 12px; color: #9ca3af; line-height: 1.4; margin-bottom: 0;">
+              Este correo es una confirmación automática del pago procesado
+              por Stripe. Guarda el ID de referencia por si necesitas
+              contactar con soporte.
+            </p>
+          </div>
+        </div>
+      `,
+    });
+
+    console.log(
+      `✉️ Email de pago recibido enviado a ${recipient} (${amountStr}, intent=${paymentIntentId || "?"})`,
+    );
+    return result;
+  } catch (error) {
+    // Nunca rompemos el flujo del webhook por un fallo de envío:
+    // el `paidAt` ya está marcado, el admin puede ver el pago.
+    console.error(
+      "Error sending payment-received email:",
+      error?.message ?? error,
+    );
+    return null;
+  }
+};
+
+/**
+ * Email al admin cuando se registra un nuevo usuario en la plataforma.
+ *
+ * El destinatario es el usuario con `role = 'admin'` (por defecto el
+ * que se llama `admin`, creado por `db.js` al arrancar). Si hay
+ * varios admins, notificamos solo al primero — son no hace falta
+ * duplicar el aviso.
+ *
+ * Se dispara fire-and-forget desde `authController.register`: un
+ * fallo de envío nunca debe impedir el alta de la cuenta.
+ */
+export const sendNewUserRegisteredEmail = async ({
+  newUsername,
+  newUserEmail,
+  newUserSlug,
+  newUserId,
+}) => {
+  if (!emailEnabled) {
+    console.warn(
+      "⚠️ Email service disabled. New-user-registered email will not be sent.",
+    );
+    return null;
+  }
+
+  try {
+    const adminRow = await db.get(
+      "SELECT email, username FROM users WHERE role = 'admin' ORDER BY id ASC LIMIT 1",
+    );
+    const adminEmail = adminRow?.email;
+
+    if (!adminEmail) {
+      console.warn(
+        "⚠️ No se encontró admin con email configurado. No se envía notificación.",
+      );
+      return null;
+    }
+
+    const createdAt = new Date().toISOString();
+
+    const result = await resend.emails.send({
+      from: "BodasOnline <onboarding@resend.dev>",
+      to: adminEmail,
+      subject: `🆕 Nuevo usuario registrado: ${newUsername}`,
+      html: `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 540px; margin: 0 auto; background-color: #ffffff; border: 1px solid #f3e8ff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.05);">
+          <div style="background: linear-gradient(135deg, #ec4899, #be185d); padding: 24px; text-align: center; color: white;">
+            <h1 style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">BodasOnline</h1>
+            <p style="margin: 6px 0 0; font-size: 14px; opacity: 0.9;">Nuevo usuario registrado</p>
+          </div>
+          <div style="padding: 32px 24px; color: #1f2937;">
+            <p style="margin-top: 0; font-size: 16px;">Hola <strong>${adminRow.username}</strong>,</p>
+            <p style="font-size: 15px; color: #4b5563; line-height: 1.5;">
+              Se ha creado una nueva cuenta en BodasOnline. Aquí tienes los
+              datos básicos para que puedas revisarla desde el panel de admin.
+            </p>
+            <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+              <tr style="background-color: #fdf2f8;">
+                <td style="padding: 12px 14px; border-radius: 8px; font-size: 14px; color: #6b7280;">Username</td>
+                <td style="padding: 12px 14px; border-radius: 8px; font-size: 14px; font-weight: 600; color: #1f2937; text-align: right; font-family: monospace;">${newUsername || "—"}</td>
+              </tr>
+              <tr>
+                <td style="padding: 12px 14px; font-size: 14px; color: #6b7280;">Email</td>
+                <td style="padding: 12px 14px; font-size: 14px; color: #1f2937; text-align: right;">${newUserEmail || "—"}</td>
+              </tr>
+              <tr style="background-color: #fdf2f8;">
+                <td style="padding: 12px 14px; border-radius: 8px; font-size: 14px; color: #6b7280;">URL invitación</td>
+                <td style="padding: 12px 14px; border-radius: 8px; font-size: 14px; color: #be185d; text-align: right; font-family: monospace;">/${newUserSlug || "—"}/</td>
+              </tr>
+              <tr>
+                <td style="padding: 12px 14px; font-size: 14px; color: #6b7280;">ID interno</td>
+                <td style="padding: 12px 14px; font-size: 13px; color: #4b5563; text-align: right; font-family: monospace;">#${newUserId ?? "—"}</td>
+              </tr>
+            </table>
+            <p style="font-size: 12px; color: #9ca3af; line-height: 1.4; margin-bottom: 0;">
+              Recibirás otro correo cuando el usuario complete el pago
+              (si Stripe está configurado).
+            </p>
+          </div>
+        </div>
+      `,
+    });
+
+    console.log(
+      `✉️ Nuevo-registro notificado a admin ${adminRow.username} <${adminEmail}> (nuevo user=${newUsername}, id=${newUserId}, t=${createdAt})`,
+    );
+    return result;
+  } catch (error) {
+    // Nunca rompemos el alta de un usuario por un fallo de email:
+    // el admin ya puede verlo desde /admin/users.
+    console.error(
+      "Error sending new-user-registered email:",
+      error?.message ?? error,
+    );
+    return null;
+  }
+};

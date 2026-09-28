@@ -32,11 +32,12 @@
     "express-rate-limit": "^8.7.0",
     "helmet": "^8.3.0",
     "isomorphic-dompurify": "^4.3.0",
-    "multer": "^2.0.2",
     "jsonwebtoken": "^9.0.3",
     "libphonenumber-js": "^1.13.13",
+    "multer": "^2.0.2",
     "resend": "^6.28.1",
     "sharp": "^0.35.4",
+    "stripe": "^22.6.2",
     "winston": "^3.19.0"
   },
   "devDependencies": {

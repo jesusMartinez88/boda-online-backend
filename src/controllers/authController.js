@@ -3,7 +3,10 @@ import * as User from "../models/user.js";
 import * as Setting from "../models/setting.js";
 import db, { initUserDefaults } from "../db.js";
 import { logWarn } from "../utils/logger.js";
-import { sendPasswordResetCodeEmail } from "../services/emailService.js";
+import {
+  sendPasswordResetCodeEmail,
+  sendNewUserRegisteredEmail,
+} from "../services/emailService.js";
 import { isValidEmail } from "../utils/validation.js";
 
 export const login = async (req, res) => {
@@ -34,7 +37,13 @@ export const login = async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: user.id, username: user.username, role: user.role, slug: user.slug },
+      {
+        id: user.id,
+        username: user.username,
+        role: user.role,
+        slug: user.slug,
+        paidAt: user.paidAt ?? null,
+      },
       process.env.JWT_SECRET,
       { expiresIn: "24h" }
     );
@@ -48,6 +57,7 @@ export const login = async (req, res) => {
         email: user.email,
         role: user.role,
         slug: user.slug,
+        paidAt: user.paidAt ?? null,
       },
     });
   } catch (error) {
@@ -122,10 +132,29 @@ export const register = async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: newUser.id, username: newUser.username, role: newUser.role, slug: newUser.slug },
+      {
+        id: newUser.id,
+        username: newUser.username,
+        role: newUser.role,
+        slug: newUser.slug,
+        paidAt: null,
+      },
       process.env.JWT_SECRET,
       { expiresIn: "24h" }
     );
+
+    // Aviso al admin (fire-and-forget): nunca debe impedir el alta.
+    sendNewUserRegisteredEmail({
+      newUsername: newUser.username,
+      newUserEmail: newUser.email,
+      newUserSlug: newUser.slug,
+      newUserId: newUser.id,
+    }).catch((emailErr) => {
+      console.warn(
+        "[auth] No se pudo notificar al admin del nuevo registro:",
+        emailErr?.message ?? emailErr,
+      );
+    });
 
     res.status(201).json({
       success: true,
@@ -136,6 +165,7 @@ export const register = async (req, res) => {
         email: newUser.email,
         role: newUser.role,
         slug: newUser.slug,
+        paidAt: null,
       },
     });
   } catch (error) {
