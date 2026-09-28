@@ -172,9 +172,35 @@ const initializeTables = async () => {
       )
     `);
 
+    // NOTA: el índice único `idx_settings_user_key ON settings(userId, key)`
+    // se crea más abajo, dentro del bloque de migración que añade `userId`
+    // a `settings` (ver bloque "Migración: settings — cambiar de UNIQUE(key) a
+    // UNIQUE(userId, key)"). NO crearlo aquí: si la tabla `settings` viene
+    // de un deploy anterior con schema legacy (sin `userId`), este CREATE
+    // INDEX falla con `no such column: userId` antes de poder migrar la tabla.
+
+    // Tabla de pagos (1 fila por PaymentIntent de Stripe).
+    // PCI DSS: nunca almacenamos datos de tarjeta; solo metadatos
+    // del intent (id, importe, moneda, estado, método) y el userId.
     await db.run(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_settings_user_key
-      ON settings(userId, key)
+      CREATE TABLE IF NOT EXISTS payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        userId INTEGER NOT NULL,
+        stripePaymentIntentId TEXT UNIQUE NOT NULL,
+        amount INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        status TEXT NOT NULL,
+        paymentMethod TEXT,
+        clientSecret TEXT,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+
+    await db.run(`
+      CREATE INDEX IF NOT EXISTS idx_payments_user
+      ON payments(userId, createdAt DESC)
     `);
 
     // Las configuraciones por defecto se inicializan por usuario en initUserDefaults()
