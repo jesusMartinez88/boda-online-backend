@@ -1,6 +1,6 @@
 {
   "name": "boda-backend",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "API REST para gestión de invitados a bodas",
   "main": "src/index.js",
   "type": "module",
@@ -10,6 +10,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
+    "dev:stripe": "powershell -ExecutionPolicy Bypass -File scripts/stripe-listen-dev.ps1",
+    "dev:stripe:3001": "powershell -ExecutionPolicy Bypass -File scripts/stripe-listen-dev.ps1 -Port 3001",
     "test": "node --test test/**/*.test.js",
     "updatePnpm": "pnpm self-update"
   },
@@ -22,20 +24,20 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@ai-sdk/openai": "^4.0.71",
+    "@ai-sdk/openai": "^4.0.78",
     "@libsql/client": "^0.18.0",
-    "ai": "^7.0.107",
+    "ai": "^7.0.116",
     "bcryptjs": "^3.0.3",
     "compression": "^1.8.2",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",
     "helmet": "^8.3.0",
-    "isomorphic-dompurify": "^4.3.0",
+    "isomorphic-dompurify": "^4.4.0",
     "jsonwebtoken": "^9.0.3",
-    "libphonenumber-js": "^1.13.13",
-    "multer": "^2.0.2",
-    "resend": "^6.28.1",
+    "libphonenumber-js": "^1.13.14",
+    "multer": "^2.4.0",
+    "resend": "^6.30.0",
     "sharp": "^0.35.4",
     "stripe": "^22.6.2",
     "winston": "^3.19.0"
