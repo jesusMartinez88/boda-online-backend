@@ -10,3 +10,6 @@ minimumReleaseAge: 4320
 strictDepBuilds: true
 allowBuilds:
   sharp: true
+
+overrides:
+  chokidar: ^4.0.3
