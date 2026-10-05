@@ -1,5 +1,6 @@
 import express from "express";
 import * as paymentController from "../controllers/paymentController.js";
+import * as discountController from "../controllers/discountController.js";
 import { authenticateJWT } from "../middleware/auth.js";
 
 const router = express.Router();
@@ -18,6 +19,16 @@ router.post(
   paymentController.createCheckoutSession,
 );
 router.get("/me", authenticateJWT, paymentController.listMine);
+
+// Validación de código de descuento. Protegido por la misma razón
+// que `create-intent`: no queremos que un anónimo pueda enumerar
+// códigos válidos. El frontend lo llama para pre-rellenar el resumen
+// antes de pedir el PaymentIntent.
+router.post(
+  "/validate-discount",
+  authenticateJWT,
+  discountController.validate,
+);
 
 // Webhook de Stripe: SIN JWT (Stripe no se autentica con JWT). El
 // cuerpo crudo lo captura el middleware global `express.json({ verify })`

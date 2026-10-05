@@ -23,6 +23,7 @@ import { MEDIA_ROOT } from "./constants/media.js";
 import { initializeEmailService } from "./services/emailService.js";
 import { initializeWhatsAppService } from "./services/whatsappService.js";
 import { initializeStripeService } from "./services/stripeService.js";
+import { initializeDiscountService } from "./services/discountService.js";
 import helmet from "helmet";
 import { rateLimit, ipKeyGenerator } from "express-rate-limit";
 import jwt from "jsonwebtoken";
@@ -34,6 +35,7 @@ const app = express();
 initializeEmailService();
 initializeWhatsAppService();
 initializeStripeService();
+initializeDiscountService();
 
 const isProduction = process.env.NODE_ENV === "production";
 

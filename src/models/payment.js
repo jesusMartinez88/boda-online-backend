@@ -20,11 +20,16 @@ export const createPayment = async ({
   status,
   paymentMethod = null,
   clientSecret = null,
+  originalAmount = null,
+  discountCode = null,
+  discountPercent = null,
 }) => {
   const result = await db.run(
     `INSERT INTO payments
-       (userId, stripePaymentIntentId, amount, currency, status, paymentMethod, clientSecret)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (userId, stripePaymentIntentId, amount, currency, status,
+        paymentMethod, clientSecret,
+        originalAmount, discountCode, discountPercent)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       userId,
       stripePaymentIntentId,
@@ -33,6 +38,9 @@ export const createPayment = async ({
       status,
       paymentMethod,
       clientSecret,
+      originalAmount,
+      discountCode,
+      discountPercent,
     ],
   );
   return { id: result.lastID, userId, stripePaymentIntentId, status };
@@ -62,7 +70,8 @@ export const updateStatusByIntentId = async (
 export const listByUserId = async (userId) => {
   return await db.all(
     `SELECT id, userId, stripePaymentIntentId, amount, currency, status,
-            paymentMethod, createdAt, updatedAt
+            paymentMethod, originalAmount, discountCode, discountPercent,
+            createdAt, updatedAt
        FROM payments
       WHERE userId = ?
       ORDER BY createdAt DESC`,

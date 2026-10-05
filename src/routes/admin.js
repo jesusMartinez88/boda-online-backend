@@ -3,6 +3,7 @@ import multer from "multer";
 import * as adminController from "../controllers/adminController.js";
 import * as invitationMediaController from "../controllers/invitationMediaController.js";
 import * as questionnaireController from "../controllers/landingQuestionnaireController.js";
+import * as discountController from "../controllers/discountController.js";
 import { authenticateJWT } from "../middleware/auth.js";
 import { requireRole } from "../middleware/requireRole.js";
 
@@ -40,5 +41,12 @@ router.put(
   "/users/:id/landing-questionnaire",
   questionnaireController.saveForUser,
 );
+
+// CRUD de códigos de descuento. Los descuentos son globales y los
+// gestiona únicamente el admin desde aquí.
+router.get("/discount-codes", discountController.list);
+router.post("/discount-codes", discountController.create);
+router.patch("/discount-codes/:id", discountController.update);
+router.delete("/discount-codes/:id", discountController.remove);
 
 export default router;

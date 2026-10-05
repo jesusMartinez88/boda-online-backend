@@ -182,6 +182,11 @@ const initializeTables = async () => {
     // Tabla de pagos (1 fila por PaymentIntent de Stripe).
     // PCI DSS: nunca almacenamos datos de tarjeta; solo metadatos
     // del intent (id, importe, moneda, estado, método) y el userId.
+    //
+    // Campos de descuento (todos opcionales, NULL cuando no se aplicó
+    // ningún cupón): `originalAmount` (importe sin descuento en céntimos),
+    // `discountCode` (código normalizado en MAYÚSCULAS), `discountPercent`
+    // (1-100). El `amount` final es siempre el que se cobró a Stripe.
     await db.run(`
       CREATE TABLE IF NOT EXISTS payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -192,11 +197,34 @@ const initializeTables = async () => {
         status TEXT NOT NULL,
         paymentMethod TEXT,
         clientSecret TEXT,
+        originalAmount INTEGER,
+        discountCode TEXT,
+        discountPercent INTEGER,
         createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
         updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
       )
     `);
+
+    // Migración: añadir columnas de descuento a `payments` en BDs
+    // existentes que se creasen antes del feature de cupones.
+    try {
+      const paymentsInfo = await db.all("PRAGMA table_info(payments)");
+      const paymentsCols = new Set(paymentsInfo.map((c) => c.name));
+      if (!paymentsCols.has("originalAmount")) {
+        await db.run(`ALTER TABLE payments ADD COLUMN originalAmount INTEGER`);
+      }
+      if (!paymentsCols.has("discountCode")) {
+        await db.run(`ALTER TABLE payments ADD COLUMN discountCode TEXT`);
+      }
+      if (!paymentsCols.has("discountPercent")) {
+        await db.run(`ALTER TABLE payments ADD COLUMN discountPercent INTEGER`);
+      }
+    } catch (err) {
+      if (!err.message?.includes("duplicate column")) {
+        console.error("Migration warning (payments discount cols):", err.message);
+      }
+    }
 
     await db.run(`
       CREATE INDEX IF NOT EXISTS idx_payments_user
@@ -933,6 +961,37 @@ const initializeTables = async () => {
     } catch (err) {
       console.error("Migration warning (page_visits):", err.message);
     }
+
+    // Tabla de códigos de descuento (Plan Pareja Completo).
+    //
+    // Solo guardamos códigos de porcentaje (no mayor). La expiración es
+    // opcional: `expiresAt = NULL` significa que el código no expira.
+    // `active = 0` permite desactivar un código sin borrarlo.
+    //
+    // El `code` se almacena SIEMPRE en mayúsculas y sin espacios para
+    // que `BODAS10` y `bodas10` se consideren el mismo código. La capa
+    // de servicio (`discountService`) normaliza antes de consultar.
+    //
+    // No tiene FK a `users`: los códigos son globales (cualquier usuario
+    // autenticado puede usarlos), por eso vive fuera de la limpieza
+    // one-shot de huérfanos de abajo.
+    await db.run(`
+      CREATE TABLE IF NOT EXISTS discount_codes (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        code        TEXT UNIQUE NOT NULL,
+        percent     INTEGER NOT NULL CHECK (percent > 0 AND percent <= 100),
+        active      INTEGER NOT NULL DEFAULT 1,
+        description TEXT,
+        expiresAt   DATETIME,
+        createdAt   DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updatedAt   DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await db.run(`
+      CREATE INDEX IF NOT EXISTS idx_discount_codes_active_expiry
+        ON discount_codes(active, expiresAt)
+    `);
 
     /**
      * Limpieza one-shot: borrar filas huérfanas que se acumularon

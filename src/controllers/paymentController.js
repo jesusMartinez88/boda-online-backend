@@ -8,6 +8,7 @@ import {
   getPaymentCurrency,
   getPaymentDescription,
 } from "../services/stripeService.js";
+import { resolveDiscountForPayment } from "./discountController.js";
 import { sendPaymentReceivedEmail } from "../services/emailService.js";
 import { logError, logWarn } from "../utils/logger.js";
 
@@ -64,48 +65,91 @@ export const createIntent = async (req, res) => {
     });
   }
 
-  const amount = getPaymentAmountCents();
+  const baseAmount = getPaymentAmountCents();
   const currency = getPaymentCurrency();
   const description = getPaymentDescription();
 
-  try {
-    // Reutilizar un intent pendiente reciente del mismo usuario para
-    // evitar duplicados si el usuario entra y sale del paso 3.
-    const recent = await Payment.listByUserId(userId);
-    const reusable = recent.find(
-      (p) =>
-        p.status === "requires_payment_method" ||
-        p.status === "requires_confirmation" ||
-        p.status === "requires_action",
-    );
+  // ── Validación opcional del código de descuento ─────────────────
+  // El frontend manda el código tal cual lo escribió el usuario. La
+  // validación SIEMPRE se hace en backend (no fiarnos del cliente).
+  // Si viene vacío, simplemente no hay descuento.
+  const body = req.body ?? {};
+  const rawCode = typeof body.discountCode === "string" ? body.discountCode : "";
+  const discountResult = rawCode
+    ? await resolveDiscountForPayment(rawCode, baseAmount)
+    : { valid: false, reason: "empty" };
 
-    if (reusable) {
-      try {
-        const live = await stripe.paymentIntents.retrieve(
-          reusable.stripePaymentIntentId,
-        );
-        if (
-          live &&
-          live.client_secret &&
-          (live.status === "requires_payment_method" ||
-            live.status === "requires_confirmation" ||
-            live.status === "requires_action")
-        ) {
-          return res.json({
-            success: true,
-            clientSecret: live.client_secret,
-            paymentIntentId: live.id,
-            amount: live.amount,
-            currency: live.currency,
-            reused: true,
-          });
+  if (!discountResult.valid && rawCode) {
+    // El usuario mandó un código que no es válido → no creamos el
+    // intent. Devolvemos 200 + `valid:false` para que la UI pueda
+    // mostrar el error sin tratar el caso como error de transporte.
+    return res.json({
+      success: true,
+      valid: false,
+      reason: discountResult.reason,
+      message:
+        "El código de descuento no es válido, está inactivo o ha expirado.",
+    });
+  }
+
+  const appliedDiscount = discountResult.valid
+    ? {
+        code: discountResult.code,
+        percent: discountResult.percent,
+        originalAmountCents: discountResult.original,
+        savingsCents: discountResult.savings,
+        finalAmountCents: discountResult.final,
+      }
+    : null;
+
+  const amount = appliedDiscount ? appliedDiscount.finalAmountCents : baseAmount;
+
+  try {
+    // Reutilizar un intent pendiente reciente del mismo usuario SOLO
+    // cuando no hay código de descuento aplicado. Si hay código,
+    // siempre creamos uno nuevo para que el importe cobrado refleje
+    // exactamente el descuento actual (evitamos reutilizar un intent
+    // antiguo con un importe que ya no corresponde).
+    let reusable = null;
+    if (!appliedDiscount) {
+      const recent = await Payment.listByUserId(userId);
+      reusable = recent.find(
+        (p) =>
+          p.status === "requires_payment_method" ||
+          p.status === "requires_confirmation" ||
+          p.status === "requires_action",
+      );
+
+      if (reusable) {
+        try {
+          const live = await stripe.paymentIntents.retrieve(
+            reusable.stripePaymentIntentId,
+          );
+          if (
+            live &&
+            live.client_secret &&
+            (live.status === "requires_payment_method" ||
+              live.status === "requires_confirmation" ||
+              live.status === "requires_action")
+          ) {
+            return res.json({
+              success: true,
+              clientSecret: live.client_secret,
+              paymentIntentId: live.id,
+              amount: live.amount,
+              currency: live.currency,
+              originalAmountCents: appliedDiscount?.originalAmountCents ?? baseAmount,
+              discount: appliedDiscount,
+              reused: true,
+            });
+          }
+        } catch (retrieveErr) {
+          // Si no se puede recuperar (intent borrado, etc.) seguimos y
+          // creamos uno nuevo. No es bloqueante.
+          logWarn(
+            `[payment] No se pudo reutilizar el intent ${reusable.stripePaymentIntentId}: ${retrieveErr.message}`,
+          );
         }
-      } catch (retrieveErr) {
-        // Si no se puede recuperar (intent borrado, etc.) seguimos y
-        // creamos uno nuevo. No es bloqueante.
-        logWarn(
-          `[payment] No se pudo reutilizar el intent ${reusable.stripePaymentIntentId}: ${retrieveErr.message}`,
-        );
       }
     }
 
@@ -121,6 +165,10 @@ export const createIntent = async (req, res) => {
         userId: String(userId),
         username: username || "",
         source: "register",
+        // Guardamos el código en metadata para que el webhook pueda
+        // auditarlo aunque se haya borrado de la tabla `discount_codes`.
+        discountCode: appliedDiscount?.code ?? "",
+        discountPercent: appliedDiscount ? String(appliedDiscount.percent) : "",
       },
       automatic_payment_methods: { enabled: false },
     });
@@ -133,14 +181,20 @@ export const createIntent = async (req, res) => {
       status: intent.status,
       paymentMethod: null,
       clientSecret: intent.client_secret,
+      originalAmount: appliedDiscount?.originalAmountCents ?? null,
+      discountCode: appliedDiscount?.code ?? null,
+      discountPercent: appliedDiscount?.percent ?? null,
     });
 
     return res.json({
       success: true,
+      valid: true,
       clientSecret: intent.client_secret,
       paymentIntentId: intent.id,
       amount: intent.amount,
       currency: intent.currency,
+      originalAmountCents: appliedDiscount?.originalAmountCents ?? baseAmount,
+      discount: appliedDiscount,
       reused: false,
     });
   } catch (error) {
